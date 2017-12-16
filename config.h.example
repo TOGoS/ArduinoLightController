@@ -1,0 +1,4 @@
+#define WIFI_SSID "SomeNetwork"
+#define WIFI_PASSWORD "SomeNetworkPassword"
+#define MQTT_SERVER "mqtt.light-automation.nuke24.net"
+#define STATUS_MQTT_TOPIC "light-controller-chat"

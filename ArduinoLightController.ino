@@ -1,3 +1,76 @@
+#include <ESP8266WiFi.h>
+#include "config.h"
+
+long tickStartTime = -10000;
+bool needDelay;
+
+char hexDigit(int num) {
+  num = num & 0xF;
+  if( num < 10 ) return '0'+num;
+  if( num < 16 ) return 'A'+num;
+  return '?'; // Should be unpossible
+}
+
+template<size_t bufferSize>
+class MessageBuffer {
+  char buffer[bufferSize];
+  size_t bufferEnd = 0;
+
+public:
+  void clear() {
+    bufferEnd = 0;
+  }
+  void append(char c) {
+    if( bufferEnd < bufferSize-1 ) {
+      buffer[bufferEnd++] = c;
+    }
+  }
+  void append(const char *str) {
+    while( *str != 0 && bufferEnd < bufferSize-1 ) {
+      buffer[bufferEnd++] = *str++;
+    }
+  }
+  void separate(const char *separator) {
+    if( bufferEnd > 0 ) append(separator);
+  }
+  void appendLabel(const char *label) {
+    separate(" ");
+    append(label);
+    append(":");
+  }
+  void appendMacAddressHex(byte *macAddress, const char *octetSeparator) {
+    for( int i=0; i<6; ++i ) {
+      if( i > 0 ) append(octetSeparator);
+      append(hexDigit(macAddress[i]>>4));
+      append(hexDigit(macAddress[i]));
+    }
+  }
+  void appendDecimal(long v) {
+    if( v < 0 ) {
+      append('-');
+      v = -v;
+    }
+    appendDecimal((unsigned long)v);
+  }
+  void appendDecimal(unsigned long v) {
+    int printed = snprintf(buffer+bufferEnd, bufferSize-bufferEnd, "%ld", v);
+    if( printed > 0 ) bufferEnd += printed;
+  }
+  void appendDecimal(float v) {
+    if( v < 0 ) {
+      append('-');
+      v = -v;
+    }
+    int hundredths = (v * 100) - ((int)v) * 100;
+    int printed = snprintf(buffer+bufferEnd, bufferSize-bufferEnd, "%d.%02d", (int)v, hundredths);
+    if( printed > 0 ) bufferEnd += printed;
+  }
+  const char *close() {
+    buffer[bufferEnd] = 0;
+    return buffer;
+  }
+};
+
 struct Switch {
   unsigned int port;
   const char *name;
@@ -23,6 +96,66 @@ Switch switches[] = {
   //{ port: D9 },
   //{ port: D10 },
 };
+
+MessageBuffer<96> messageBuffer;
+byte macAddressBuffer[6];
+long lastWiFiConnectAttempt = -10000;
+int previousWiFiStatus = -1;
+
+void reportWiFiStatus(int wiFiStatus) {
+  Serial.print("# WiFi status: ");
+  switch( wiFiStatus ) {
+  case WL_CONNECTED:
+    Serial.println("WL_CONNECTED");
+    Serial.print("# IP address: ");
+    Serial.println(WiFi.localIP());
+    Serial.print("# MAC address: ");
+    WiFi.macAddress(macAddressBuffer);
+    messageBuffer.clear();
+    messageBuffer.appendMacAddressHex(macAddressBuffer, ":");
+    Serial.println(messageBuffer.close());
+    break;
+  case WL_NO_SHIELD:
+    Serial.println("WL_NO_SHIELD");
+    break;
+  case WL_IDLE_STATUS:
+    Serial.println("WL_IDLE_STATUS");
+    break;
+  case WL_NO_SSID_AVAIL:
+    Serial.println("WL_NO_SSID_AVAIL");
+    break;
+  case WL_SCAN_COMPLETED:
+    Serial.println("WL_SCAN_COMPLETED");
+    break;
+  case WL_CONNECT_FAILED:
+    Serial.println("WL_CONNECT_FAILED");
+    break;
+  case WL_CONNECTION_LOST:
+    Serial.println("WL_CONNECTION_LOST");
+    break;
+  case WL_DISCONNECTED:
+    Serial.println("WL_DISCONNECTED");
+    break;
+  default:
+    Serial.println(wiFiStatus);
+  }
+}
+
+int maintainWiFiConnection() {
+  int wiFiStatus = WiFi.status();
+  if( wiFiStatus != previousWiFiStatus ) {
+    reportWiFiStatus(wiFiStatus);
+    previousWiFiStatus = wiFiStatus;
+  }    
+  if( wiFiStatus != WL_CONNECTED && tickStartTime - lastWiFiConnectAttempt >= 10000 ) {
+    Serial.print("# Attempting to connect to ");
+    Serial.print(WIFI_SSID);
+    Serial.println("...");
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    lastWiFiConnectAttempt = tickStartTime;
+  }
+  return wiFiStatus;
+}
 
 namespace ArduForth {
   const byte MAX_TOKEN_LENGTH = 32;
@@ -274,8 +407,7 @@ namespace ArduForth {
 
 #define FOREACH_SWITCH(iter) for (unsigned int iter=0; iter<switchCount; ++iter)
 
-unsigned int tick;
-bool needDelay;
+unsigned int tickNumber;
 
 /*
 class CommandProcessor {
@@ -340,11 +472,14 @@ void setup() {
     Serial.println(swich.port);
     needDelay = true;
   }
-  tick = 0;
+  tickNumber = 0;
 }
 
 void loop() {
-  while( Serial.available() > 0 ) {
+  tickStartTime = millis();
+
+  maintainWiFiConnection();
+  if( Serial.available() > 0 ) {
     ArduForth::handleChar(Serial.read());
   }
   if(needDelay) {
@@ -353,13 +488,14 @@ void loop() {
     delay(1);
     needDelay = false;
   }
+
   FOREACH_SWITCH(i) {
     Switch &swich = switches[i];
     //unsigned int div = ((swich.cycleOffset + tick) % swich.cycleLength) * swich.cycleDivisions / swich.cycleLength;
     //digitalWrite(swich.port, swich.cycleData[div] ? HIGH : LOW);
-    digitalWrite(swich.port, (tick % swich.cycleLength) < swich.cycleOnLength ? HIGH : LOW);
+    digitalWrite(swich.port, (tickNumber % swich.cycleLength) < swich.cycleOnLength ? HIGH : LOW);
   }
-  ++tick;
+  ++tickNumber;
 }
 
 
