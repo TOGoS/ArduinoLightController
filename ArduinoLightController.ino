@@ -1,6 +1,7 @@
 #include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
 #include <OSCMessage.h> // As found at https://github.com/CNMAT/OSC
+#include <OSCBundle.h> // ditto
 #include "config.h"
 
 void printHelp() {
@@ -158,11 +159,6 @@ public:
       pinMode(swich.port, OUTPUT);
       swich.cycleLength = 1000;
       swich.cycleOnLength = (i+1)*100;
-      //swich.cycleLength = i * 10;
-      //swich.cycleDivisions = 2;
-      //swich.cycleOffset = 0;
-      //swich.cycleData[0] = true;
-      //swich.cycleData[1] = false;
       Serial.print("# Channel ");
       Serial.print(i);
       Serial.print(" name:");
@@ -240,7 +236,7 @@ int maintainWiFiConnection() {
   if( wiFiStatus != previousWiFiStatus ) {
     reportWiFiStatus(wiFiStatus);
     previousWiFiStatus = wiFiStatus;
-  }    
+  }
   if( wiFiStatus != WL_CONNECTED && tickStartTime - lastWiFiConnectAttempt >= 10000 ) {
     Serial.print("# Attempting to connect to ");
     Serial.print(WIFI_SSID);
@@ -254,20 +250,40 @@ int maintainWiFiConnection() {
 class UDPOSC {
   WiFiUDP& udp;
 public:
+  enum PacketType {
+    NONE,
+    MESSAGE,
+    BUNDLE
+  };
+
   UDPOSC(WiFiUDP& udp) : udp(udp) { }
 
   OSCMessage oscMessage;
+  OSCBundle oscBundle;
   byte packetBuffer[1024];
-  bool receive() {
+  PacketType receive() {
     int cb = udp.parsePacket();
-    if( !cb ) return false;
+    if( !cb ) return NONE;
     int packetSize = udp.read(packetBuffer, 1024);
-    oscMessage.empty();
-    oscMessage.fill(packetBuffer, packetSize);
+
     Serial.print("# Received ");
     Serial.print(packetSize);
-    Serial.println("-byte packet");
-    return true;
+    Serial.print("-byte '");
+    Serial.print(packetBuffer[0]);
+    Serial.println("' packet");
+
+    oscBundle.empty();
+    oscMessage.empty();
+
+    if (packetBuffer[0] == '#') {
+      // Either this doesn't work,
+      // or puredata's sending bad bundles
+      oscBundle.fill(packetBuffer, packetSize);
+      return BUNDLE;
+    } else {
+      oscMessage.fill(packetBuffer, packetSize);
+      return MESSAGE;
+    }
   }
   void send() {
     
@@ -583,24 +599,34 @@ void setup() {
 }
 
 void handleOscMessage(OSCMessage &oscMessage){
-  Serial.print("# Received OSC packet: ");
+  Serial.print("# Received OSC message: ");
   oscMessage.getAddress(messageBuffer.buffer);
   Serial.print(messageBuffer.buffer);
   messageBuffer.clear();
   for( int i=0; i<oscMessage.size(); ++i ) {
     Serial.print(" ");
-    Serial.print(oscMessage.getType(i));
+    char type = oscMessage.getType(i);
+    switch(type) {
+    case 'i': Serial.print(oscMessage.getInt(i)); break;
+    case 'f': Serial.print(oscMessage.getFloat(i)); break;
+    default:
+    Serial.print("<");
+    Serial.print(type);
+    Serial.print(">");
+    }
   }
   Serial.println("");
-  if( oscMessage.fullMatch("/channels/*/on") ) {
+  if( oscMessage.fullMatch("/channels/*/value") ) {
     unsigned int channelId = messageBuffer.buffer[10] - '0';
-    bool newStatus = true;
+    float newStatus = 1;
     if( oscMessage.isInt(0) ) {
-      newStatus = oscMessage.getInt(0) != 0;
+      newStatus = oscMessage.getInt(0);
     } else if( oscMessage.isBoolean(0) ) {
-      newStatus = oscMessage.getBoolean(0);
+      newStatus = oscMessage.getBoolean(0) ? 1 : 0;
+    } else if( oscMessage.isFloat(0) ) {
+      newStatus = oscMessage.getFloat(0);
     }
-    outputController.setChannelDutyCycle(channelId, newStatus ? 1 : 0);
+    outputController.setChannelDutyCycle(channelId, newStatus);
   }
 }
 
@@ -613,8 +639,25 @@ void loop() {
     ArduForth::handleChar(Serial.read());
   }
 
-  if( udpOsc.receive() ) {
+  UDPOSC::PacketType received = udpOsc.receive();
+  switch( received ) {
+  case UDPOSC::BUNDLE:
+    {
+      int messageIndex = 0;
+      OSCMessage *oscMessage;
+      while( (oscMessage = udpOsc.oscBundle.getOSCMessage(messageIndex)) != NULL ) {
+        handleOscMessage(*oscMessage);
+        ++messageIndex;
+      }
+      Serial.print("# OSC bundle contained ");
+      Serial.print(messageIndex);
+      Serial.println(" messages");
+      break;
+    }
+  case UDPOSC::MESSAGE:
     handleOscMessage(udpOsc.oscMessage);
+    break;
+  default: break;
   }
   
   if(needDelay) {
