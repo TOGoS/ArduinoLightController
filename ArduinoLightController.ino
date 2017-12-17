@@ -1,5 +1,14 @@
 #include <ESP8266WiFi.h>
+#include <WiFiUdp.h>
+#include <OSCMessage.h> // As found at https://github.com/CNMAT/OSC
 #include "config.h"
+
+void printHelp() {
+  Serial.println("# Forth commands:");
+  Serial.println("#   ( channel on-ticks total-ticks -- ) set-channel-duty-cycle");
+  Serial.println("#   ( -- ) status");
+  Serial.println("#   ( -- ) help");
+}
 
 long tickStartTime = -10000;
 bool needDelay;
@@ -13,10 +22,10 @@ char hexDigit(int num) {
 
 template<size_t bufferSize>
 class MessageBuffer {
+public:
   char buffer[bufferSize];
   size_t bufferEnd = 0;
 
-public:
   void clear() {
     bufferEnd = 0;
   }
@@ -69,33 +78,111 @@ public:
     buffer[bufferEnd] = 0;
     return buffer;
   }
+  size_t getRemainingSpace() {
+    return bufferSize-bufferEnd;
+  }
 };
 
-struct Switch {
-  unsigned int port;
-  const char *name;
-  unsigned int cycleLength;
-  unsigned int cycleOnLength;
-  //unsigned int cycleOffset;
-  //unsigned int cycleLength;
-  //unsigned int cycleDivisions;
-  //bool cycleData[32];
-};
+class OutputController {
+  struct OutputSwitch {
+    unsigned int port;
+    const char *name;
+    unsigned int cycleLength;
+    unsigned int cycleOnLength;
+    //unsigned int cycleOffset;
+    //unsigned int cycleLength;
+    //unsigned int cycleDivisions;
+    //bool cycleData[32];
+  };
+  
+  unsigned int tickNumber = 0;
+  
+  OutputSwitch switches[8] = {
+    { port: D1, name: "D1" },
+    { port: D2, name: "D2" },
+    { port: D3, name: "D3" },
+    { port: D4, name: "D4" },
+    { port: D5, name: "D5" },
+    { port: D6, name: "D6" },
+    { port: D7, name: "D7" },
+    { port: D8, name: "D8" },
+  };
+  size_t switchCount = sizeof(switches)/sizeof(OutputSwitch);
+public:
+  OutputController() {
+    for (unsigned int i=0; i<switchCount; ++i) {
+      OutputSwitch &swich = switches[i];
+      swich.cycleLength = 1000;
+      swich.cycleOnLength = (i+1)*100;
+    }
+  }
 
-const unsigned int switchCount = 8;
+  void setChannelDutyCycle(size_t channelId, unsigned int cycleOnLength, unsigned int cycleLength) {
+    if( channelId >= switchCount ) {
+      Serial.print("# Channel index out of bounds: ");
+      Serial.println(channelId);
+      return;
+    }
+    if( cycleLength == 0 ) {
+      Serial.print("# Ack, someone tied to set channel ");
+      Serial.print(channelId);
+      Serial.println("'s duty cycle denominator to zero!  Ignoring.");
+      return;
+    }
+    Serial.print("# Setting channel ");
+    Serial.print(channelId);
+    Serial.print(" duty cycle to ");
+    Serial.print(cycleOnLength);
+    Serial.print("/");
+    Serial.println(cycleLength);
+    switches[channelId].cycleOnLength = cycleOnLength;
+    switches[channelId].cycleLength = cycleLength;
+  }
+  
+  void setChannelDutyCycle(size_t channelId, float intensity) {
+    if( intensity < 0 ) intensity = 0;
+    if( intensity > 1 ) intensity = 1;
+    setChannelDutyCycle(channelId, (unsigned int)(intensity*256), 256);
+  }
 
-Switch switches[] = {
-  { port: D1, name: "D1" },
-  { port: D2, name: "D2" },
-  { port: D3, name: "D3" },
-  { port: D4, name: "D4" },
-  { port: D5, name: "D5" },
-  { port: D6, name: "D6" },
-  { port: D7, name: "D7" },
-  { port: D8, name: "D8" },
-  //{ port: D9 },
-  //{ port: D10 },
+  void begin() {
+    for (unsigned int i=0; i<switchCount; ++i) {
+      OutputSwitch &swich = switches[i];
+      pinMode(swich.port, OUTPUT);
+    }
+  }
+  
+  void printChannelInfo() {
+    for (unsigned int i=0; i<switchCount; ++i) {
+      OutputSwitch &swich = switches[i];
+      pinMode(swich.port, OUTPUT);
+      swich.cycleLength = 1000;
+      swich.cycleOnLength = (i+1)*100;
+      //swich.cycleLength = i * 10;
+      //swich.cycleDivisions = 2;
+      //swich.cycleOffset = 0;
+      //swich.cycleData[0] = true;
+      //swich.cycleData[1] = false;
+      Serial.print("# Channel ");
+      Serial.print(i);
+      Serial.print(" name:");
+      Serial.print(swich.name);
+      Serial.print(" port:");
+      Serial.println(swich.port);
+    }
+  }
+  
+  void tick() {
+    for (unsigned int i=0; i<switchCount; ++i) {
+      OutputSwitch &swich = switches[i];
+      //unsigned int div = ((swich.cycleOffset + tick) % swich.cycleLength) * swich.cycleDivisions / swich.cycleLength;
+      //digitalWrite(swich.port, swich.cycleData[div] ? HIGH : LOW);
+      digitalWrite(swich.port, (tickNumber % swich.cycleLength) < swich.cycleOnLength ? HIGH : LOW);
+    }
+    ++tickNumber;
+  }
 };
+OutputController outputController;
 
 MessageBuffer<96> messageBuffer;
 byte macAddressBuffer[6];
@@ -114,6 +201,8 @@ void reportWiFiStatus(int wiFiStatus) {
     messageBuffer.clear();
     messageBuffer.appendMacAddressHex(macAddressBuffer, ":");
     Serial.println(messageBuffer.close());
+    Serial.print("# Listening for OSC messages on port ");
+    Serial.println(OSC_LOCAL_PORT);
     break;
   case WL_NO_SHIELD:
     Serial.println("WL_NO_SHIELD");
@@ -141,6 +230,11 @@ void reportWiFiStatus(int wiFiStatus) {
   }
 }
 
+void printStatus() {
+  reportWiFiStatus(WiFi.status());
+  outputController.printChannelInfo();
+}
+
 int maintainWiFiConnection() {
   int wiFiStatus = WiFi.status();
   if( wiFiStatus != previousWiFiStatus ) {
@@ -156,6 +250,32 @@ int maintainWiFiConnection() {
   }
   return wiFiStatus;
 }
+
+class UDPOSC {
+  WiFiUDP& udp;
+public:
+  UDPOSC(WiFiUDP& udp) : udp(udp) { }
+
+  OSCMessage oscMessage;
+  byte packetBuffer[1024];
+  bool receive() {
+    int cb = udp.parsePacket();
+    if( !cb ) return false;
+    int packetSize = udp.read(packetBuffer, 1024);
+    oscMessage.empty();
+    oscMessage.fill(packetBuffer, packetSize);
+    Serial.print("# Received ");
+    Serial.print(packetSize);
+    Serial.println("-byte packet");
+    return true;
+  }
+  void send() {
+    
+  }
+};
+
+WiFiUDP udp;
+UDPOSC udpOsc(udp);
 
 namespace ArduForth {
   const byte MAX_TOKEN_LENGTH = 32;
@@ -195,7 +315,7 @@ namespace ArduForth {
     
     void run( boolean compileTime ) const {
       if( compileTime && !isCompileTime ) {
-        Serial.print("Word '");
+        Serial.print("# Word '");
         Serial.print(text);
         Serial.println("' is not a compile-time word, so ignoring at compile-time.");
         // TODO: Add to definition
@@ -203,7 +323,7 @@ namespace ArduForth {
         if( isNative ) {
           implementation.nativeFunction();
         } else {
-          Serial.print("Word '");
+          Serial.print("# Word '");
           Serial.print(text);
           Serial.println("' is not native; ignoring for now.");
           // TODO: something with implementation.forthFunction
@@ -280,16 +400,10 @@ namespace ArduForth {
     unsigned int denominator = (unsigned int)pop();
     unsigned int numerator = (unsigned int)pop();
     unsigned int switchNumber = (unsigned int)pop();
-    if (switchNumber >= switchCount) {
-      Serial.print("Switch #");
-      Serial.print(switchNumber);
-      Serial.print(" out of range 0...");
-      Serial.println(switchCount);
-      return;
-    }
-    
-    switches[switchNumber].cycleLength = denominator;
-    switches[switchNumber].cycleOnLength = numerator;
+    outputController.setChannelDutyCycle(switchNumber, numerator, denominator);
+  }
+  void printChannelInfo() {
+    outputController.printChannelInfo();
   }
     
   const Word staticWords[] = {
@@ -339,8 +453,24 @@ namespace ArduForth {
       implementation: {
         nativeFunction: setSwitchDutyCycle
       },
-      text: "set-switch-duty-cycle"
+      text: "set-channel-duty-cycle"
     },
+    {
+      isCompileTime: false,
+      isNative: true,
+      implementation: {
+        nativeFunction: printStatus
+      },
+      text: "status"
+    },
+    {
+      isCompileTime: false,
+      isNative: true,
+      implementation: {
+        nativeFunction: printHelp
+      },
+      text: "help"
+    }
   };
   
   ////
@@ -401,14 +531,6 @@ namespace ArduForth {
   }
 }
 
-
-
-
-
-#define FOREACH_SWITCH(iter) for (unsigned int iter=0; iter<switchCount; ++iter)
-
-unsigned int tickNumber;
-
 /*
 class CommandProcessor {
 public:
@@ -454,34 +576,47 @@ void setup() {
   Serial.begin(115200);
   Serial.println("");
   Serial.println("# Henlo, this is ArduinoLightController, booting!");
-  FOREACH_SWITCH(i) {
-    Switch &swich = switches[i];
-    pinMode(swich.port, OUTPUT);
-    swich.cycleLength = 1000;
-    swich.cycleOnLength = (i+1)*100;
-    //swich.cycleLength = i * 10;
-    //swich.cycleDivisions = 2;
-    //swich.cycleOffset = 0;
-    //swich.cycleData[0] = true;
-    //swich.cycleData[1] = false;
-    Serial.print("# Switch ");
-    Serial.print(i);
-    Serial.print(" name:");
-    Serial.print(swich.name);
-    Serial.print(" port:");
-    Serial.println(swich.port);
-    needDelay = true;
+  udp.begin(OSC_LOCAL_PORT);
+  outputController.begin();
+  outputController.printChannelInfo();
+  Serial.println("# Type 'help' for a command list.");
+}
+
+void handleOscMessage(OSCMessage &oscMessage){
+  Serial.print("# Received OSC packet: ");
+  oscMessage.getAddress(messageBuffer.buffer);
+  Serial.print(messageBuffer.buffer);
+  messageBuffer.clear();
+  for( int i=0; i<oscMessage.size(); ++i ) {
+    Serial.print(" ");
+    Serial.print(oscMessage.getType(i));
   }
-  tickNumber = 0;
+  Serial.println("");
+  if( oscMessage.fullMatch("/channels/*/on") ) {
+    unsigned int channelId = messageBuffer.buffer[10] - '0';
+    bool newStatus = true;
+    if( oscMessage.isInt(0) ) {
+      newStatus = oscMessage.getInt(0) != 0;
+    } else if( oscMessage.isBoolean(0) ) {
+      newStatus = oscMessage.getBoolean(0);
+    }
+    outputController.setChannelDutyCycle(channelId, newStatus ? 1 : 0);
+  }
 }
 
 void loop() {
   tickStartTime = millis();
 
   maintainWiFiConnection();
+  
   if( Serial.available() > 0 ) {
     ArduForth::handleChar(Serial.read());
   }
+
+  if( udpOsc.receive() ) {
+    handleOscMessage(udpOsc.oscMessage);
+  }
+  
   if(needDelay) {
     // Some things seem to not work without a delay somewhere.
     // So after kicking those things off, set needDelay = true.
@@ -489,13 +624,7 @@ void loop() {
     needDelay = false;
   }
 
-  FOREACH_SWITCH(i) {
-    Switch &swich = switches[i];
-    //unsigned int div = ((swich.cycleOffset + tick) % swich.cycleLength) * swich.cycleDivisions / swich.cycleLength;
-    //digitalWrite(swich.port, swich.cycleData[div] ? HIGH : LOW);
-    digitalWrite(swich.port, (tickNumber % swich.cycleLength) < swich.cycleOnLength ? HIGH : LOW);
-  }
-  ++tickNumber;
+  outputController.tick();
 }
 
 
