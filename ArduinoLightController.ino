@@ -1,7 +1,5 @@
 #include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
-//#include <OSCMessage.h> // As found at https://github.com/CNMAT/OSC
-//#include <OSCBundle.h> // ditto
 #include "config.h"
 
 void printHelp() {
@@ -250,8 +248,6 @@ void reportWiFiStatus(int wiFiStatus) {
     messageBuffer.clear();
     messageBuffer.appendMacAddressHex(macAddressBuffer, ":");
     Serial.println(messageBuffer.close());
-    Serial.print("# Listening for OSC messages on port ");
-    Serial.println(OSC_LOCAL_PORT);
     break;
   case WL_NO_SHIELD:
     Serial.println("WL_NO_SHIELD");
@@ -675,7 +671,6 @@ void setup() {
   Serial.begin(115200);
   Serial.println("");
   Serial.println("# Henlo, this is ArduinoLightController, booting!");
-  //udp.begin(OSC_LOCAL_PORT);
   outputController.begin();
   outputController.printChannelInfo();
   Serial.println("# Type 'help' for a command list.");
