@@ -1,7 +1,7 @@
 #include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
-#include <OSCMessage.h> // As found at https://github.com/CNMAT/OSC
-#include <OSCBundle.h> // ditto
+//#include <OSCMessage.h> // As found at https://github.com/CNMAT/OSC
+//#include <OSCBundle.h> // ditto
 #include "config.h"
 
 void printHelp() {
@@ -12,6 +12,7 @@ void printHelp() {
 }
 
 long tickStartTime = -10000;
+uint8_t tickNumber = 0;
 bool needDelay;
 
 char hexDigit(int num) {
@@ -84,96 +85,148 @@ public:
   }
 };
 
+//// OutputController
+
 class OutputController {
-  struct OutputSwitch {
+ public:
+  using ChannelID = uint8_t;
+  using OutputLevel = uint8_t;
+  using NoteIndex = uint8_t;
+  using SequenceLength = uint8_t;
+  static constexpr unsigned int MAX_SEQUENCE_LENGTH = 64;
+  unsigned long startTime;
+  uint16_t bpmHigh = 120;
+  uint8_t bpmLow = 0;
+  
+  struct Note {
+    OutputLevel startLevel;
+    OutputLevel endLevel;
+  };
+  struct OutputChannel {
     unsigned int port;
     const char *name;
-    unsigned int cycleLength;
-    unsigned int cycleOnLength;
+    //unsigned int cycleLength;
+    //unsigned int cycleOnLength;
+
+    SequenceLength sequenceLength;
+    uint8_t beatDivision;
+    
+    Note notes[MAX_SEQUENCE_LENGTH];
     //unsigned int cycleOffset;
     //unsigned int cycleLength;
     //unsigned int cycleDivisions;
     //bool cycleData[32];
   };
   
-  unsigned int tickNumber = 0;
-  
-  OutputSwitch switches[8] = {
-    { port: D1, name: "D1" },
-    { port: D2, name: "D2" },
-    { port: D3, name: "D3" },
-    { port: D4, name: "D4" },
-    { port: D5, name: "D5" },
-    { port: D6, name: "D6" },
-    { port: D7, name: "D7" },
-    { port: D8, name: "D8" },
+  OutputChannel channels[8] = {
+    { port: D1, name: "D1", sequenceLength: 1, beatDivision: 1 },
+    { port: D2, name: "D2", sequenceLength: 1, beatDivision: 1 },
+    { port: D3, name: "D3", sequenceLength: 1, beatDivision: 1 },
+    { port: D4, name: "D4", sequenceLength: 1, beatDivision: 1 },
+    { port: D5, name: "D5", sequenceLength: 1, beatDivision: 1 },
+    { port: D6, name: "D6", sequenceLength: 1, beatDivision: 1 },
+    { port: D7, name: "D7", sequenceLength: 1, beatDivision: 1 },
+    { port: D8, name: "D8", sequenceLength: 1, beatDivision: 1 },
   };
-  size_t switchCount = sizeof(switches)/sizeof(OutputSwitch);
+  static constexpr size_t channelCount = sizeof(channels)/sizeof(OutputChannel);
 public:
   OutputController() {
-    for (unsigned int i=0; i<switchCount; ++i) {
-      OutputSwitch &swich = switches[i];
-      swich.cycleLength = 1000;
-      swich.cycleOnLength = (i+1)*100;
+    for (uint8_t i=0; i<channelCount; ++i) {
+      OutputChannel &channel = channels[i];
+      channel.sequenceLength = 8;
     }
   }
 
-  void setChannelDutyCycle(size_t channelId, unsigned int cycleOnLength, unsigned int cycleLength) {
-    if( channelId >= switchCount ) {
+  void setNoteLevel(ChannelID channelId, NoteIndex noteIndex, OutputLevel startLevel, OutputLevel endLevel) {
+    if( channelId >= channelCount ) {
       Serial.print("# Channel index out of bounds: ");
       Serial.println(channelId);
       return;
     }
-    if( cycleLength == 0 ) {
-      Serial.print("# Ack, someone tied to set channel ");
-      Serial.print(channelId);
-      Serial.println("'s duty cycle denominator to zero!  Ignoring.");
+    if( noteIndex >= MAX_SEQUENCE_LENGTH ) {
+      Serial.print("# Note index out of bounds: ");
+      Serial.println(noteIndex);
       return;
     }
-    Serial.print("# Setting channel ");
-    Serial.print(channelId);
-    Serial.print(" duty cycle to ");
-    Serial.print(cycleOnLength);
-    Serial.print("/");
-    Serial.println(cycleLength);
-    switches[channelId].cycleOnLength = cycleOnLength;
-    switches[channelId].cycleLength = cycleLength;
+    Note &note = channels[channelId].notes[noteIndex];
+    note.startLevel = startLevel;
+    note.endLevel = endLevel;
   }
-  
-  void setChannelDutyCycle(size_t channelId, float intensity) {
-    if( intensity < 0 ) intensity = 0;
-    if( intensity > 1 ) intensity = 1;
-    setChannelDutyCycle(channelId, (unsigned int)(intensity*256), 256);
+
+  void setBpm( uint16_t bpm, uint8_t subBpm=0 ) {
+    this->bpmHigh = bpm;
+    this->bpmLow = subBpm;
+  }
+
+  void setBeatDivision( ChannelID channelId, uint8_t beatDivision ) {
+    if( channelId >= channelCount ) {
+      Serial.print("# Channel index out of bounds: ");
+      Serial.println(channelId);
+      return;
+    }
+    this->channels[channelId].beatDivision = beatDivision;
+  }
+
+  void setSequenceLength( ChannelID channelId, SequenceLength sequenceLength ) {
+    if( channelId >= channelCount ) {
+      Serial.print("# Channel index out of bounds: ");
+      Serial.println(channelId);
+      return;
+    }
+    if( sequenceLength > MAX_SEQUENCE_LENGTH ) {
+      Serial.print("# Sequence length out of bounds: ");
+      Serial.println(sequenceLength);
+      Serial.print("# Max sequence length: ");
+      Serial.println(MAX_SEQUENCE_LENGTH);
+      return;
+    }
+    this->channels[channelId].sequenceLength = sequenceLength;
   }
 
   void begin() {
-    for (unsigned int i=0; i<switchCount; ++i) {
-      OutputSwitch &swich = switches[i];
-      pinMode(swich.port, OUTPUT);
+    this->startTime = tickStartTime;
+    for( unsigned int i=0; i<channelCount; ++i ) {
+      OutputChannel &channel = channels[i];
+      pinMode(channel.port, OUTPUT);
     }
   }
   
   void printChannelInfo() {
-    for (unsigned int i=0; i<switchCount; ++i) {
-      OutputSwitch &swich = switches[i];
-      pinMode(swich.port, OUTPUT);
-      swich.cycleLength = 1000;
-      swich.cycleOnLength = (i+1)*100;
+    for( unsigned int i=0; i<channelCount; ++i ) {
+      OutputChannel &channel = channels[i];
+      pinMode(channel.port, OUTPUT);
       Serial.print("# Channel ");
       Serial.print(i);
       Serial.print(" name:");
-      Serial.print(swich.name);
+      Serial.print(channel.name);
       Serial.print(" port:");
-      Serial.println(swich.port);
+      Serial.print(channel.port);
+      Serial.print(" data:");
+      for( unsigned int j=0; j<channel.sequenceLength; ++j ) {
+        if( j>0 ) Serial.print(";");
+        Serial.print(channel.notes[j].startLevel);
+        Serial.print(",");
+        Serial.print(channel.notes[j].endLevel);
+      }
+      Serial.println("");
     }
   }
   
   void tick() {
-    for (unsigned int i=0; i<switchCount; ++i) {
-      OutputSwitch &swich = switches[i];
+    // Index in 256ths of a beat
+    uint32_t index = (tickStartTime - this->startTime) * ((uint32_t(this->bpmHigh) << 8) + this->bpmLow) / 60000;
+    uint8_t tickHash = uint8_t(tickNumber) ^ uint8_t(tickStartTime);
+    for( unsigned int i=0; i<channelCount; ++i ) {
+      OutputChannel &channel = channels[i];
+      uint8_t noteIndex = ((index * channel.beatDivision) >> 8) % channel.sequenceLength;
+      uint8_t subNoteIndex = uint8_t(index * channel.beatDivision);
+      Note &note = channel.notes[noteIndex];
+      uint8_t level = (
+        uint16_t(note.startLevel) * (255-subNoteIndex) + 
+        uint16_t(note.endLevel) * (subNoteIndex)) >> 9;
       //unsigned int div = ((swich.cycleOffset + tick) % swich.cycleLength) * swich.cycleDivisions / swich.cycleLength;
       //digitalWrite(swich.port, swich.cycleData[div] ? HIGH : LOW);
-      digitalWrite(swich.port, (tickNumber % swich.cycleLength) < swich.cycleOnLength ? HIGH : LOW);
+      digitalWrite(channel.port, (level > tickHash ? HIGH : LOW));
     }
     ++tickNumber;
   }
@@ -247,51 +300,8 @@ int maintainWiFiConnection() {
   return wiFiStatus;
 }
 
-class UDPOSC {
-  WiFiUDP& udp;
-public:
-  enum PacketType {
-    NONE,
-    MESSAGE,
-    BUNDLE
-  };
 
-  UDPOSC(WiFiUDP& udp) : udp(udp) { }
-
-  OSCMessage oscMessage;
-  OSCBundle oscBundle;
-  byte packetBuffer[1024];
-  PacketType receive() {
-    int cb = udp.parsePacket();
-    if( !cb ) return NONE;
-    int packetSize = udp.read(packetBuffer, 1024);
-
-    Serial.print("# Received ");
-    Serial.print(packetSize);
-    Serial.print("-byte '");
-    Serial.print(packetBuffer[0]);
-    Serial.println("' packet");
-
-    oscBundle.empty();
-    oscMessage.empty();
-
-    if (packetBuffer[0] == '#') {
-      // Either this doesn't work,
-      // or puredata's sending bad bundles
-      oscBundle.fill(packetBuffer, packetSize);
-      return BUNDLE;
-    } else {
-      oscMessage.fill(packetBuffer, packetSize);
-      return MESSAGE;
-    }
-  }
-  void send() {
-    
-  }
-};
-
-WiFiUDP udp;
-UDPOSC udpOsc(udp);
+//// ArduForth
 
 namespace ArduForth {
   const byte MAX_TOKEN_LENGTH = 32;
@@ -407,16 +417,38 @@ namespace ArduForth {
   void addIntsFromStack() {
     push( pop() + pop() );
   }
+  void popAndDiscard() {
+    pop();
+  }
   void subtractIntsFromStack() {
     int b = pop();
     int a = pop();
     push( a - b );
   }
-  void setSwitchDutyCycle() {
-    unsigned int denominator = (unsigned int)pop();
-    unsigned int numerator = (unsigned int)pop();
-    unsigned int switchNumber = (unsigned int)pop();
-    outputController.setChannelDutyCycle(switchNumber, numerator, denominator);
+  void setNoteData() {
+    OutputController::OutputLevel endLevel = (OutputController::OutputLevel)pop();
+    OutputController::OutputLevel startLevel = (OutputController::OutputLevel)pop();
+    OutputController::NoteIndex noteIndex = (OutputController::NoteIndex)pop();
+    OutputController::ChannelID channelId = (OutputController::ChannelID)pop();
+    outputController.setNoteLevel(channelId, noteIndex, startLevel, endLevel);
+  }
+  void setSequenceLength() {
+    OutputController::SequenceLength sequenceLength = (OutputController::SequenceLength)pop();
+    OutputController::ChannelID channelId = (OutputController::ChannelID)pop();
+    outputController.setSequenceLength(channelId, sequenceLength);
+  }
+  void setBpm() {
+    uint8_t beat256ths = (uint8_t)pop();
+    uint16_t beats = (uint8_t)pop();
+    outputController.setBpm( beats, beat256ths );
+  }
+  void setBeatDivision() {
+    uint8_t notesPerBeat = (uint8_t)pop();
+    OutputController::ChannelID channelId = (OutputController::ChannelID)pop();
+    outputController.setBeatDivision( channelId, notesPerBeat );
+  }
+  void downbeat() {
+    outputController.startTime = millis();
   }
   void printChannelInfo() {
     outputController.printChannelInfo();
@@ -430,6 +462,14 @@ namespace ArduForth {
         nativeFunction: pushStackFree
       },
       text: "stack-free"
+    },
+    {
+      isCompileTime: false,
+      isNative: true,
+      implementation: {
+        nativeFunction: popAndDiscard
+      },
+      text: "pop"
     },
     {
       isCompileTime: false,
@@ -467,9 +507,41 @@ namespace ArduForth {
       isCompileTime: false,
       isNative: true,
       implementation: {
-        nativeFunction: setSwitchDutyCycle
+        nativeFunction: setNoteData
       },
-      text: "set-channel-duty-cycle"
+      text: "set-note-data"
+    },
+    {
+      isCompileTime: false,
+      isNative: true,
+      implementation: {
+        nativeFunction: setSequenceLength
+      },
+      text: "set-sequence-length"
+    },
+    {
+      isCompileTime: false,
+      isNative: true,
+      implementation: {
+        nativeFunction: setBpm
+      },
+      text: "set-bpm"
+    },
+    {
+      isCompileTime: false,
+      isNative: true,
+      implementation: {
+        nativeFunction: setBeatDivision
+      },
+      text: "set-beat-division"
+    },
+    {
+      isCompileTime: false,
+      isNative: true,
+      implementation: {
+        nativeFunction: downbeat
+      },
+      text: "downbeat"
     },
     {
       isCompileTime: false,
@@ -531,11 +603,20 @@ namespace ArduForth {
     }
     tokenBufferLength = 0;
   }
+
+  void printPrompt() {
+    Serial.print("# Stack: ");
+    printStack();
+  }
   
   void handleChar( char c ) {
     // TODO: Handle double-quoted strings
     switch( c ) {
-    case '\n': case ' ': case '\t': case '\r':
+    case '\n':
+      flushToken();
+      printPrompt();
+      break;
+    case ' ': case '\t': case '\r':
       flushToken();
       break;
     default:
@@ -589,45 +670,15 @@ CommandProcessor commandProcessor;
 */
 
 void setup() {
+  tickStartTime = millis();
+  
   Serial.begin(115200);
   Serial.println("");
   Serial.println("# Henlo, this is ArduinoLightController, booting!");
-  udp.begin(OSC_LOCAL_PORT);
+  //udp.begin(OSC_LOCAL_PORT);
   outputController.begin();
   outputController.printChannelInfo();
   Serial.println("# Type 'help' for a command list.");
-}
-
-void handleOscMessage(OSCMessage &oscMessage){
-  Serial.print("# Received OSC message: ");
-  oscMessage.getAddress(messageBuffer.buffer);
-  Serial.print(messageBuffer.buffer);
-  messageBuffer.clear();
-  for( int i=0; i<oscMessage.size(); ++i ) {
-    Serial.print(" ");
-    char type = oscMessage.getType(i);
-    switch(type) {
-    case 'i': Serial.print(oscMessage.getInt(i)); break;
-    case 'f': Serial.print(oscMessage.getFloat(i)); break;
-    default:
-    Serial.print("<");
-    Serial.print(type);
-    Serial.print(">");
-    }
-  }
-  Serial.println("");
-  if( oscMessage.fullMatch("/channels/*/value") ) {
-    unsigned int channelId = messageBuffer.buffer[10] - '0';
-    float newStatus = 1;
-    if( oscMessage.isInt(0) ) {
-      newStatus = oscMessage.getInt(0);
-    } else if( oscMessage.isBoolean(0) ) {
-      newStatus = oscMessage.getBoolean(0) ? 1 : 0;
-    } else if( oscMessage.isFloat(0) ) {
-      newStatus = oscMessage.getFloat(0);
-    }
-    outputController.setChannelDutyCycle(channelId, newStatus);
-  }
 }
 
 void loop() {
@@ -635,29 +686,8 @@ void loop() {
 
   maintainWiFiConnection();
   
-  if( Serial.available() > 0 ) {
+  while( Serial.available() > 0 ) {
     ArduForth::handleChar(Serial.read());
-  }
-
-  UDPOSC::PacketType received = udpOsc.receive();
-  switch( received ) {
-  case UDPOSC::BUNDLE:
-    {
-      int messageIndex = 0;
-      OSCMessage *oscMessage;
-      while( (oscMessage = udpOsc.oscBundle.getOSCMessage(messageIndex)) != NULL ) {
-        handleOscMessage(*oscMessage);
-        ++messageIndex;
-      }
-      Serial.print("# OSC bundle contained ");
-      Serial.print(messageIndex);
-      Serial.println(" messages");
-      break;
-    }
-  case UDPOSC::MESSAGE:
-    handleOscMessage(udpOsc.oscMessage);
-    break;
-  default: break;
   }
   
   if(needDelay) {
@@ -668,6 +698,7 @@ void loop() {
   }
 
   outputController.tick();
+  ++tickNumber;
 }
 
 
