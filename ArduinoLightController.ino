@@ -2,13 +2,6 @@
 #include <WiFiUdp.h>
 #include "config.h"
 
-void printHelp() {
-  Serial.println("# Forth commands:");
-  Serial.println("#   ( channel on-ticks total-ticks -- ) set-channel-duty-cycle");
-  Serial.println("#   ( -- ) status");
-  Serial.println("#   ( -- ) help");
-}
-
 long tickStartTime = -10000;
 uint8_t tickNumber = 0;
 bool needDelay;
@@ -89,14 +82,14 @@ class OutputController {
  public:
   using ChannelID = uint8_t;
   using OutputLevel = uint8_t;
-  using NoteIndex = uint8_t;
+  using StepIndex = uint8_t;
   using SequenceLength = uint8_t;
   static constexpr unsigned int MAX_SEQUENCE_LENGTH = 64;
   unsigned long startTime;
   uint16_t bpmHigh = 120;
   uint8_t bpmLow = 0;
   
-  struct Note {
+  struct StepData {
     OutputLevel startLevel;
     OutputLevel endLevel;
   };
@@ -107,9 +100,9 @@ class OutputController {
     //unsigned int cycleOnLength;
 
     SequenceLength sequenceLength;
-    uint8_t beatDivision;
+    uint8_t beatDivision; // steps per beat
     
-    Note notes[MAX_SEQUENCE_LENGTH];
+    StepData stepData[MAX_SEQUENCE_LENGTH];
     //unsigned int cycleOffset;
     //unsigned int cycleLength;
     //unsigned int cycleDivisions;
@@ -135,20 +128,20 @@ public:
     }
   }
 
-  void setNoteLevel(ChannelID channelId, NoteIndex noteIndex, OutputLevel startLevel, OutputLevel endLevel) {
+  void setStepData(ChannelID channelId, StepIndex stepIndex, OutputLevel startLevel, OutputLevel endLevel) {
     if( channelId >= channelCount ) {
       Serial.print("# Channel index out of bounds: ");
       Serial.println(channelId);
       return;
     }
-    if( noteIndex >= MAX_SEQUENCE_LENGTH ) {
-      Serial.print("# Note index out of bounds: ");
-      Serial.println(noteIndex);
+    if( stepIndex >= MAX_SEQUENCE_LENGTH ) {
+      Serial.print("# Step index out of bounds: ");
+      Serial.println(stepIndex);
       return;
     }
-    Note &note = channels[channelId].notes[noteIndex];
-    note.startLevel = startLevel;
-    note.endLevel = endLevel;
+    StepData &step = channels[channelId].stepData[stepIndex];
+    step.startLevel = startLevel;
+    step.endLevel = endLevel;
   }
 
   void setBpm( uint16_t bpm, uint8_t subBpm=0 ) {
@@ -185,6 +178,9 @@ public:
     this->startTime = tickStartTime;
     for( unsigned int i=0; i<channelCount; ++i ) {
       OutputChannel &channel = channels[i];
+      channel.sequenceLength = i+1;
+      channel.stepData[i].startLevel = 255;
+      channel.stepData[i].endLevel = 0;
       pinMode(channel.port, OUTPUT);
     }
   }
@@ -202,9 +198,9 @@ public:
       Serial.print(" data:");
       for( unsigned int j=0; j<channel.sequenceLength; ++j ) {
         if( j>0 ) Serial.print(";");
-        Serial.print(channel.notes[j].startLevel);
+        Serial.print(channel.stepData[j].startLevel);
         Serial.print(",");
-        Serial.print(channel.notes[j].endLevel);
+        Serial.print(channel.stepData[j].endLevel);
       }
       Serial.println("");
     }
@@ -216,12 +212,12 @@ public:
     uint8_t tickHash = uint8_t(tickNumber) ^ uint8_t(tickStartTime);
     for( unsigned int i=0; i<channelCount; ++i ) {
       OutputChannel &channel = channels[i];
-      uint8_t noteIndex = ((index * channel.beatDivision) >> 8) % channel.sequenceLength;
-      uint8_t subNoteIndex = uint8_t(index * channel.beatDivision);
-      Note &note = channel.notes[noteIndex];
+      uint8_t stepIndex = ((index * channel.beatDivision) >> 8) % channel.sequenceLength;
+      uint8_t subStepIndex = uint8_t(index * channel.beatDivision);
+      StepData &step = channel.stepData[stepIndex];
       uint8_t level = (
-        uint16_t(note.startLevel) * (255-subNoteIndex) + 
-        uint16_t(note.endLevel) * (subNoteIndex)) >> 9;
+        uint16_t(step.startLevel) * (255-subStepIndex) + 
+        uint16_t(step.endLevel) * (subStepIndex)) >> 9;
       //unsigned int div = ((swich.cycleOffset + tick) % swich.cycleLength) * swich.cycleDivisions / swich.cycleLength;
       //digitalWrite(swich.port, swich.cycleData[div] ? HIGH : LOW);
       digitalWrite(channel.port, (level > tickHash ? HIGH : LOW));
@@ -333,7 +329,8 @@ namespace ArduForth {
       void (*nativeFunction)();
       Word *forthFunction;
     } implementation;
-    char *text;
+    const char *text;
+    const char *help;
     
     void run( boolean compileTime ) const {
       if( compileTime && !isCompileTime ) {
@@ -421,12 +418,12 @@ namespace ArduForth {
     int a = pop();
     push( a - b );
   }
-  void setNoteData() {
+  void setStepData() {
     OutputController::OutputLevel endLevel = (OutputController::OutputLevel)pop();
     OutputController::OutputLevel startLevel = (OutputController::OutputLevel)pop();
-    OutputController::NoteIndex noteIndex = (OutputController::NoteIndex)pop();
+    OutputController::StepIndex stepIndex = (OutputController::StepIndex)pop();
     OutputController::ChannelID channelId = (OutputController::ChannelID)pop();
-    outputController.setNoteLevel(channelId, noteIndex, startLevel, endLevel);
+    outputController.setStepData(channelId, stepIndex, startLevel, endLevel);
   }
   void setSequenceLength() {
     OutputController::SequenceLength sequenceLength = (OutputController::SequenceLength)pop();
@@ -434,9 +431,9 @@ namespace ArduForth {
     outputController.setSequenceLength(channelId, sequenceLength);
   }
   void setBpm() {
-    uint8_t beat256ths = (uint8_t)pop();
+    //uint8_t beat256ths = (uint8_t)pop();
     uint16_t beats = (uint8_t)pop();
-    outputController.setBpm( beats, beat256ths );
+    outputController.setBpm( beats );
   }
   void setBeatDivision() {
     uint8_t notesPerBeat = (uint8_t)pop();
@@ -449,7 +446,8 @@ namespace ArduForth {
   void printChannelInfo() {
     outputController.printChannelInfo();
   }
-    
+  void printHelp();
+  
   const Word staticWords[] = {
     {
       isCompileTime: false,
@@ -457,7 +455,8 @@ namespace ArduForth {
       implementation: {
         nativeFunction: pushStackFree
       },
-      text: "stack-free"
+      text: "stack-free",
+      help: "( -- n ) where n is the amount of available space on the stack, in words"
     },
     {
       isCompileTime: false,
@@ -465,7 +464,8 @@ namespace ArduForth {
       implementation: {
         nativeFunction: popAndDiscard
       },
-      text: "pop"
+      text: "pop",
+      help: "( x -- )"
     },
     {
       isCompileTime: false,
@@ -473,7 +473,8 @@ namespace ArduForth {
       implementation: {
         nativeFunction: printStack
       },
-      text: "print-stack"
+      text: ".s",
+      help: "( -- ) print stack contents"
     },
     {
       isCompileTime: false,
@@ -481,7 +482,8 @@ namespace ArduForth {
       implementation: {
         nativeFunction: printIntFromStack
       },
-      text: "print-int"
+      text: ".",
+      help: "( i -- ) prints out the int, in decimal"
     },
     {
       isCompileTime: false,
@@ -489,7 +491,8 @@ namespace ArduForth {
       implementation: {
         nativeFunction: addIntsFromStack
       },
-      text: "+"
+      text: "+",
+      help: "( a b -- a+b )"
     },
     {
       isCompileTime: false,
@@ -497,15 +500,17 @@ namespace ArduForth {
       implementation: {
         nativeFunction: subtractIntsFromStack
       },
-      text: "-"
+      text: "-",
+      help: "( a b -- a-b )"
     },
     {
       isCompileTime: false,
       isNative: true,
       implementation: {
-        nativeFunction: setNoteData
+        nativeFunction: setStepData
       },
-      text: "set-note-data"
+      text: "set-step-data",
+      help: "( channelId stepIndex startValue endValue -- )"
     },
     {
       isCompileTime: false,
@@ -513,7 +518,8 @@ namespace ArduForth {
       implementation: {
         nativeFunction: setSequenceLength
       },
-      text: "set-sequence-length"
+      text: "set-sequence-length",
+      help: "( channelId length -- ) set length of channel's sequence, in steps"
     },
     {
       isCompileTime: false,
@@ -521,7 +527,8 @@ namespace ArduForth {
       implementation: {
         nativeFunction: setBpm
       },
-      text: "set-bpm"
+      text: "set-bpm",
+      help: "( bpm -- ) set beats per minute"
     },
     {
       isCompileTime: false,
@@ -529,7 +536,8 @@ namespace ArduForth {
       implementation: {
         nativeFunction: setBeatDivision
       },
-      text: "set-beat-division"
+      text: "set-beat-division",
+      help: "( stepsPerBeat -- )"
     },
     {
       isCompileTime: false,
@@ -537,7 +545,8 @@ namespace ArduForth {
       implementation: {
         nativeFunction: downbeat
       },
-      text: "downbeat"
+      text: "downbeat",
+      help: "( -- ) restart sequence NOW"
     },
     {
       isCompileTime: false,
@@ -545,7 +554,8 @@ namespace ArduForth {
       implementation: {
         nativeFunction: printStatus
       },
-      text: "status"
+      text: "status",
+      help: "( -- ) print various information about this device"
     },
     {
       isCompileTime: false,
@@ -553,7 +563,8 @@ namespace ArduForth {
       implementation: {
         nativeFunction: printHelp
       },
-      text: "help"
+      text: "help",
+      help: "( -- ) print information about forth commands"
     }
   };
   
@@ -564,6 +575,16 @@ namespace ArduForth {
     begin: staticWords,
     end: staticWords + (int)(sizeof(staticWords)/sizeof(Word))
   };
+
+  void printHelp() {
+    Serial.println("# Forth commands:");
+    for( const Word *w = staticDict.begin; w < staticDict.end; ++w ) {
+      Serial.print("# ");
+      Serial.print(w->text);
+      Serial.print(" ");
+      Serial.println(w->help);
+    }
+  }
   
   void handleWord( char *buffer, int len ) {
     boolean isInteger = true;
@@ -667,10 +688,18 @@ CommandProcessor commandProcessor;
 
 void setup() {
   tickStartTime = millis();
-  
+  delay(500);
+  pinMode(LED_BUILTIN, OUTPUT);
+  for( unsigned int d=0; d<5; ++d ) {
+    digitalWrite(LED_BUILTIN, LOW); // Light on
+    delay(100);
+    digitalWrite(LED_BUILTIN, HIGH); // Light off
+    delay(200);
+  }
   Serial.begin(115200);
   Serial.println("");
   Serial.println("# Henlo, this is ArduinoLightController, booting!");
+  delay(500);
   outputController.begin();
   outputController.printChannelInfo();
   Serial.println("# Type 'help' for a command list.");
