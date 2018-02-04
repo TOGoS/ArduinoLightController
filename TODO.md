@@ -1,4 +1,9 @@
-- Allow forth packets via UDP
+- Useful default sequences so you can just wire up your lights and do things without needing a programmer around
+- Use the remaining pin for
+  - beat
+  - reset to defaults (long hold)
+    - flash lights during long hold to indicate what's going to be done
+- Save sequences to EEPROM or whatever
 - Add per-channel control mode:
   - sequenced
   - triggered envelopes

@@ -1,61 +1,13 @@
 #include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
+#include "BufferPrint.h"
+#include "hexDigit.h"
+#include "printMacAddressHex.h"
 #include "config.h"
 
 long tickStartTime = -10000;
 uint8_t tickNumber = 0;
 bool needDelay;
-
-char hexDigit(int num) {
-  num = num & 0xF;
-  if( num < 10 ) return '0' + num;
-  if( num < 16 ) return 'A' + num;
-  return '?'; // Should be unpossible
-}
-
-class BufferPrint : public Print {
-    char *buffer;
-    const size_t bufferSize;
-    size_t messageEnd = 0;
-  public:
-    BufferPrint(char *buffer, size_t bufferSize) : buffer(buffer), bufferSize(bufferSize) {}
-    
-    void clear() {
-      messageEnd = 0;
-    }
-    
-    virtual size_t write(uint8_t c) override {
-      if( messageEnd < bufferSize - 1 ) {
-        buffer[messageEnd++] = c;
-        return 1;
-      } else return 0;
-    }
-    
-    size_t write(const uint8_t *stuff, size_t len) override {
-      size_t maxLen = bufferSize - messageEnd;
-      if( len > maxLen ) len = maxLen;
-      while( len-- > 0 ) buffer[messageEnd++] = *stuff++;
-    }
-    
-    virtual int availableForWrite() const {
-      return this->bufferSize - this->messageEnd;
-    }
-    
-    const char *getBuffer() const {
-      return buffer;
-    }
-    size_t size() const {
-      return messageEnd;
-    }
-};
-
-void printMacAddressHex(byte *macAddress, const char *octetSeparator, class Print& printer) {
-  for( int i = 0; i < 6; ++i ) {
-    if( i > 0 ) printer.print(octetSeparator);
-    printer.print(hexDigit(macAddress[i] >> 4));
-    printer.print(hexDigit(macAddress[i]));
-  }
-}
 
 char printBuffer[1024];
 BufferPrint bufferPrinter(printBuffer, sizeof(printBuffer));
