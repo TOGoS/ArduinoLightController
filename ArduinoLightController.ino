@@ -4,6 +4,7 @@
 #include "hexDigit.h"
 #include "printMacAddressHex.h"
 #include "config.h"
+#include "version.h"
 
 long tickStartTime = -10000;
 uint8_t tickNumber = 0;
@@ -177,6 +178,8 @@ void reportWiFiStatus(int wiFiStatus, class Print &printer = *defaultPrinter) {
       printer.println("WL_CONNECTED");
       printer.print("# IP address: ");
       printer.println(WiFi.localIP());
+      printer.print("# Subnet mask: ");
+      printer.println(WiFi.subnetMask());
       printer.print("# MAC address: ");
       WiFi.macAddress(macAddressBuffer);
       printMacAddressHex(macAddressBuffer, ":", printer);
@@ -213,20 +216,35 @@ void printStatus() {
   outputController.printChannelInfo();
 }
 
-int maintainWiFiConnection() {
-  int wiFiStatus = WiFi.status();
-  if( wiFiStatus != previousWiFiStatus ) {
-    reportWiFiStatus(wiFiStatus);
-    previousWiFiStatus = wiFiStatus;
+WiFiUDP udp;
+long lastBroadcastTime = -10000;
+
+void broadcastPresence() {
+  IPAddress broadcastIp = WiFi.localIP() | ~WiFi.subnetMask();
+  bufferPrinter.clear();
+  bufferPrinter.print("# Hello from ");
+  printMacAddressHex(macAddressBuffer, ":", bufferPrinter);
+  bufferPrinter.println();
+  bufferPrinter.print("# I'm running ");
+  bufferPrinter.print(ALC_NAME);
+  bufferPrinter.print(" v");
+  bufferPrinter.println(ALC_VERSION);
+  bufferPrinter.print("# Listening for forth commands on port ");
+  bufferPrinter.println(FORTH_UDP_PORT);
+  //Serial.print("# Broadcasting presense packet to ");
+  //Serial.print(broadcastIp);
+  //Serial.print(":");
+  //Serial.println(FORTH_UDP_PORT);
+  udp.beginPacketMulticast(broadcastIp, FORTH_UDP_PORT, WiFi.localIP());
+  udp.write(bufferPrinter.getBuffer(), bufferPrinter.size());
+  udp.endPacket();
+  lastBroadcastTime = tickStartTime;
+}
+
+void maybeBroadcastPresence() {
+  if( WiFi.status() == WL_CONNECTED && tickStartTime - lastBroadcastTime > 10000 ) {
+    broadcastPresence();
   }
-  if( wiFiStatus != WL_CONNECTED && tickStartTime - lastWiFiConnectAttempt >= 10000 ) {
-    Serial.print("# Attempting to connect to ");
-    Serial.print(WIFI_SSID);
-    Serial.println("...");
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    lastWiFiConnectAttempt = tickStartTime;
-  }
-  return wiFiStatus;
 }
 
 
@@ -389,9 +407,8 @@ class ArduForth {
     void printChannelInfo() {
       outputController.printChannelInfo();
     }
-    void _printStatus() {
-      printStatus();
-    }
+    void _broadcastPresence() { broadcastPresence(); }
+    void _printStatus() { printStatus(); }
     void printHelp();
     
     static const Word staticWords[];
@@ -445,7 +462,7 @@ class ArduForth {
       switch( c ) {
         case '\n':
           flushToken();
-          printPrompt();
+          // printPrompt(); // Don't want infinite chat when 2 get talking!
           break;
         case ' ': case '\t': case '\r':
           flushToken();
@@ -570,6 +587,15 @@ const ArduForth::Word ArduForth::staticWords[] = {
     help: "( -- ) restart sequence NOW"
   },
   {
+    isCompileTime: true,
+    isNative: true,
+    implementation: {
+      nativeFunction: &ArduForth::_broadcastPresence
+    },
+    text: "broadcast-presence",
+    help: "( -- ) send a broadcast UDP packet (port ""FORTH_UDP_PORT"" to announce the existence of this node"
+  },
+  {
     isCompileTime: false,
     isNative: true,
     implementation: {
@@ -594,9 +620,25 @@ const ArduForth::Dictionary<const ArduForth::Word> ArduForth::staticDict = {
   end: ArduForth::staticWords + (int)(sizeof(ArduForth::staticWords) / sizeof(ArduForth::Word))
 };
 
-WiFiUDP udp;
 ArduForth serialInterpreter;
 ArduForth udpInterpreter;
+
+int maintainWiFiConnection() {
+  int wiFiStatus = WiFi.status();
+  if( wiFiStatus != previousWiFiStatus ) {
+    reportWiFiStatus(wiFiStatus);
+    previousWiFiStatus = wiFiStatus;
+  }
+  if( wiFiStatus != WL_CONNECTED && tickStartTime - lastWiFiConnectAttempt >= 10000 ) {
+    Serial.print("# Attempting to connect to ");
+    Serial.print(WIFI_SSID);
+    Serial.println("...");
+    wiFiStatus = WiFi.begin(WIFI_SSID, WIFI_PASSWORD); // Used to ignore return value; what is correct?
+    lastWiFiConnectAttempt = tickStartTime;
+  }
+  maybeBroadcastPresence();
+  return wiFiStatus;
+}
 
 void setup() {
   tickStartTime = millis();
@@ -610,7 +652,11 @@ void setup() {
   }
   Serial.begin(115200);
   Serial.println("");
-  Serial.println("# Henlo, this is ArduinoLightController, booting!");
+  Serial.print("# Henlo, this is ");
+  Serial.print(ALC_NAME);
+  Serial.print(" v");
+  Serial.print(ALC_VERSION);
+  Serial.println(", booting!");
   delay(500);
   outputController.begin();
   outputController.printChannelInfo();
@@ -653,14 +699,18 @@ void loop() {
     udp.flush();
     
     // Write response
-    udp.beginPacket(udp.remoteIP(), udp.remotePort());
-    if( !bufferPrinter.size() ) bufferPrinter.println("# OK");
-    udp.write(bufferPrinter.getBuffer(), bufferPrinter.size());
-    udp.endPacket(); // That'll send it back whence it came, right?
+    if( bufferPrinter.size() ) {
+      udp.beginPacket(udp.remoteIP(), udp.remotePort());
+      //if( !bufferPrinter.size() ) bufferPrinter.println("# OK");
+      udp.write(bufferPrinter.getBuffer(), bufferPrinter.size());
+      udp.endPacket(); // Send it back whence it came!
+      Serial.print("responded with ");
+      Serial.print(bufferPrinter.size());
+      Serial.println("-byte packet");
+    } else {
+      Serial.println("did not respond");
+    }
     
-    Serial.print("responded with ");
-    Serial.print(bufferPrinter.size());
-    Serial.print("-byte packet");
     bufferPrinter.clear();
   }
 
