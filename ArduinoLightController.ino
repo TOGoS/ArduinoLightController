@@ -169,45 +169,46 @@ class OutputController {
 OutputController outputController;
 
 byte macAddressBuffer[6];
-long lastWiFiConnectAttempt = -10000;
-int previousWiFiStatus = -1;
+
 void reportWiFiStatus(int wiFiStatus, class Print &printer = *defaultPrinter) {
   printer.print("# WiFi status: ");
   switch( wiFiStatus ) {
-    case WL_CONNECTED:
-      printer.println("WL_CONNECTED");
-      printer.print("# IP address: ");
-      printer.println(WiFi.localIP());
-      printer.print("# Subnet mask: ");
-      printer.println(WiFi.subnetMask());
-      printer.print("# MAC address: ");
-      WiFi.macAddress(macAddressBuffer);
-      printMacAddressHex(macAddressBuffer, ":", printer);
-      printer.println();
-      break;
-    case WL_NO_SHIELD:
-      printer.println("WL_NO_SHIELD");
-      break;
-    case WL_IDLE_STATUS:
-      printer.println("WL_IDLE_STATUS");
-      break;
-    case WL_NO_SSID_AVAIL:
-      printer.println("WL_NO_SSID_AVAIL");
-      break;
-    case WL_SCAN_COMPLETED:
-      printer.println("WL_SCAN_COMPLETED");
-      break;
-    case WL_CONNECT_FAILED:
-      printer.println("WL_CONNECT_FAILED");
-      break;
-    case WL_CONNECTION_LOST:
-      printer.println("WL_CONNECTION_LOST");
-      break;
-    case WL_DISCONNECTED:
-      printer.println("WL_DISCONNECTED");
-      break;
-    default:
-      printer.println(wiFiStatus);
+  case WL_CONNECTED:
+    printer.println("WL_CONNECTED");
+    printer.print("# SSID: ");
+    printer.println(WiFi.SSID());
+    printer.print("# IP address: ");
+    printer.println(WiFi.localIP());
+    printer.print("# Subnet mask: ");
+    printer.println(WiFi.subnetMask());
+    printer.print("# MAC address: ");
+    WiFi.macAddress(macAddressBuffer);
+    printMacAddressHex(macAddressBuffer, ":", printer);
+    printer.println();
+    break;
+  case WL_NO_SHIELD:
+    printer.println("WL_NO_SHIELD");
+    break;
+  case WL_IDLE_STATUS:
+    printer.println("WL_IDLE_STATUS");
+    break;
+  case WL_NO_SSID_AVAIL:
+    printer.println("WL_NO_SSID_AVAIL");
+    break;
+  case WL_SCAN_COMPLETED:
+    printer.println("WL_SCAN_COMPLETED");
+    break;
+  case WL_CONNECT_FAILED:
+    printer.println("WL_CONNECT_FAILED");
+    break;
+  case WL_CONNECTION_LOST:
+    printer.println("WL_CONNECTION_LOST");
+    break;
+  case WL_DISCONNECTED:
+    printer.println("WL_DISCONNECTED");
+    break;
+  default:
+    printer.println(wiFiStatus);
   }
 }
 
@@ -623,22 +624,83 @@ const ArduForth::Dictionary<const ArduForth::Word> ArduForth::staticDict = {
 ArduForth serialInterpreter;
 ArduForth udpInterpreter;
 
-int maintainWiFiConnection() {
-  int wiFiStatus = WiFi.status();
-  if( wiFiStatus != previousWiFiStatus ) {
-    reportWiFiStatus(wiFiStatus);
-    previousWiFiStatus = wiFiStatus;
+struct WiFiConfig {
+  const char *ssid;
+  const char *password;
+} staticWiFiNetworkConfigs[] = WIFI_NETWORKS;
+
+class WiFiMaintainer {
+  WiFiConfig *configs;
+  size_t configCount;
+  int lastReportedWiFiStatus = -1;
+  int lastAttemptedConfigIndex = -1;
+  int lastSuccessfulConfigIndex = -1;
+  unsigned int failureCount = 0;
+  long lastWiFiConnectAttempt = -10000;
+  int pickConfig() {
+    if( this->configCount == 0 ) return -1;
+    int base = this->lastSuccessfulConfigIndex < 0 ? 0 : this->lastSuccessfulConfigIndex;
+    return (base + failureCount) % this->configCount;
   }
-  if( wiFiStatus != WL_CONNECTED && tickStartTime - lastWiFiConnectAttempt >= 10000 ) {
-    Serial.print("# Attempting to connect to ");
-    Serial.print(WIFI_SSID);
-    Serial.println("...");
-    wiFiStatus = WiFi.begin(WIFI_SSID, WIFI_PASSWORD); // Used to ignore return value; what is correct?
-    lastWiFiConnectAttempt = tickStartTime;
+public:
+  WiFiMaintainer(WiFiConfig *configs, size_t configCount) : configs(configs), configCount(configCount) {}  
+  
+  int maintainWiFiConnection(long currentTime) {
+    int wiFiStatus = WiFi.status();
+    if( wiFiStatus != lastReportedWiFiStatus ) {
+      reportWiFiStatus(wiFiStatus);
+      lastReportedWiFiStatus = wiFiStatus;
+      if( wiFiStatus == WL_CONNECTED ) {
+	failureCount = 0;
+	if( lastAttemptedConfigIndex >= 0 ) {
+	  lastSuccessfulConfigIndex = lastAttemptedConfigIndex;
+	}
+      }
+    }
+
+    // Our first attempt is to let the thing connect
+    // based on whatever was saved in EEPROM last time!
+    if( wiFiStatus == WL_DISCONNECTED && lastWiFiConnectAttempt < 0 ) {
+      lastWiFiConnectAttempt = currentTime;
+      Serial.print("# Waiting to see if WiFi automatically connects with previous settings to ");
+      Serial.print(WiFi.SSID());
+      Serial.println("...");
+      return wiFiStatus;
+    }
+    
+    bool attemptConnect = false;
+    if( wiFiStatus != WL_CONNECTED ) {
+      // Give like 10 seconds for connection to work itself out
+      // before trying a different config.
+      if( currentTime - lastWiFiConnectAttempt >= 10000 ) {
+	// If it's been 2 seconds since we attempted to connect,
+	// and we're still not connected, move on to the next config.
+	++failureCount;
+	Serial.print("# WiFi connection attempt ");
+	Serial.print(failureCount);
+	Serial.println("...");
+	attemptConnect = true;
+      }
+    }
+    if( attemptConnect ) {
+      lastAttemptedConfigIndex = this->pickConfig();
+      if( lastAttemptedConfigIndex >= 0 ) {
+	const WiFiConfig &config = this->configs[lastAttemptedConfigIndex];
+	Serial.print("# Attempting to connect to ");
+	Serial.print(config.ssid);
+	Serial.println("...");
+	WiFi.begin(config.ssid, config.password);
+      } else {
+	Serial.println("# No WiFi networks configured!");
+      }
+      lastWiFiConnectAttempt = currentTime;
+    }
+    maybeBroadcastPresence();
+    return wiFiStatus;
   }
-  maybeBroadcastPresence();
-  return wiFiStatus;
-}
+};
+
+class WiFiMaintainer wiFiMaintainer(staticWiFiNetworkConfigs, sizeof(staticWiFiNetworkConfigs)/sizeof(WiFiConfig));
 
 void setup() {
   tickStartTime = millis();
@@ -668,7 +730,7 @@ void loop() {
   tickStartTime = millis();
   defaultPrinter = &Serial;
   
-  maintainWiFiConnection();
+  wiFiMaintainer.maintainWiFiConnection(tickStartTime);
   
   while( Serial.available() > 0 ) {
     serialInterpreter.handleChar(Serial.read());

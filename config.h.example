@@ -1,3 +1,2 @@
-#define WIFI_SSID "SomeNetwork"
-#define WIFI_PASSWORD "SomeNetworkPassword"
 #define FORTH_UDP_PORT 7007
+#define WIFI_NETWORKS {{"SomeNetwork","SomeNetworkPassword"}}
