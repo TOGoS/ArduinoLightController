@@ -236,12 +236,12 @@ void broadcastPresence() {
   bufferPrinter.print(" v");
   bufferPrinter.println(ALC_VERSION);
   bufferPrinter.print("# Listening for forth commands on port ");
-  bufferPrinter.println(FORTH_UDP_PORT);
+  bufferPrinter.println(PRESENCE_BROADCAST_PORT);
   //Serial.print("# Broadcasting presense packet to ");
   //Serial.print(broadcastIp);
   //Serial.print(":");
   //Serial.println(FORTH_UDP_PORT);
-  udp.beginPacketMulticast(broadcastIp, FORTH_UDP_PORT, WiFi.localIP());
+  udp.beginPacketMulticast(broadcastIp, PRESENCE_BROADCAST_PORT, WiFi.localIP());
   udp.write(bufferPrinter.getBuffer(), bufferPrinter.size());
   udp.endPacket();
   lastBroadcastTime = tickStartTime;

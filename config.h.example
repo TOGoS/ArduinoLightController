@@ -1,2 +1,6 @@
 #define FORTH_UDP_PORT 7007
+// It won't break anything to make presence broadcast port
+// the same as FORTH_UDP_PORT, since it's all comments.
+// It just means that nodes will be processing more packets that they don't care about.
+#define PRESENCE_BROADCAST_PORT 7008
 #define WIFI_NETWORKS {{"SomeNetwork","SomeNetworkPassword"}}
