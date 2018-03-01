@@ -1,4 +1,3 @@
-- Useful default sequences so you can just wire up your lights and do things without needing a programmer around
 - Use the remaining pin for
   - beat
   - reset to defaults (long hold)
@@ -15,3 +14,5 @@
 * Broadcast presence on LAN
   - Since we're just doing FORTH packets
     send one out like "# Hi I'm so-and-so!"
+v0.1.1:
+* Useful default sequences so you can just wire up your lights and do things without needing a programmer around

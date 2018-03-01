@@ -114,13 +114,64 @@ class OutputController {
       this->channels[channelId].sequenceLength = sequenceLength;
     }
     
+    void loadDefaultSequence() {
+      // Long bass drum
+      channels[0].sequenceLength = 1;
+      channels[0].beatDivision = 1;
+      setStepData(0, 0, 255, 0);
+      // Hihats
+      channels[1].sequenceLength = 4;
+      channels[1].beatDivision = 4;
+      setStepData(1, 0, 0, 0);
+      setStepData(1, 1, 0, 0);
+      setStepData(1, 2, 255, 0);
+      setStepData(1, 3, 255, 0);
+      // Different hihat
+      channels[2].sequenceLength = 4;
+      channels[2].beatDivision = 4;
+      setStepData(2, 0, 0, 0);
+      setStepData(2, 1, 0, 0);
+      setStepData(2, 2, 255, 255);
+      setStepData(2, 3, 0, 0);
+      // 3 = solid off
+      channels[3].sequenceLength = 1;
+      channels[3].beatDivision = 1;
+      setStepData(3, 0, 0, 0);
+      // thing that goes every 3
+      channels[4].sequenceLength = 3;
+      channels[4].beatDivision = 4;
+      setStepData(4, 0, 0, 0);
+      setStepData(4, 1, 0, 0);
+      setStepData(4, 2, 255, 128);
+      // thing that goes every 5
+      channels[5].sequenceLength = 5;
+      channels[5].beatDivision = 4;
+      setStepData(5, 0, 0, 0);
+      setStepData(5, 1, 0, 0);
+      setStepData(5, 2, 0, 0);
+      setStepData(5, 3, 0, 0);
+      setStepData(5, 4, 255, 128);
+      // snare drum!
+      channels[6].sequenceLength = 8;
+      channels[6].beatDivision = 4;
+      setStepData(4, 0, 0, 0);
+      setStepData(4, 1, 0, 0);
+      setStepData(4, 2, 0, 0);
+      setStepData(4, 3, 0, 0);
+      setStepData(4, 4, 255, 0);
+      setStepData(4, 5, 0, 0);
+      setStepData(4, 6, 0, 0);
+      setStepData(4, 7, 0, 0);
+      // 7 = solid on
+      channels[7].sequenceLength = 1;
+      channels[7].beatDivision = 1;
+      setStepData(7, 0, 255, 255);
+    }
+
     void begin() {
       this->startTime = tickStartTime;
       for( unsigned int i = 0; i < channelCount; ++i ) {
         OutputChannel &channel = channels[i];
-        channel.sequenceLength = i + 1;
-        channel.stepData[i].startLevel = 255;
-        channel.stepData[i].endLevel = 0;
         pinMode(channel.port, OUTPUT);
       }
     }
@@ -410,6 +461,10 @@ class ArduForth {
     void downbeat() {
       outputController.startTime = millis();
     }
+    void loadDefaultSequence() {
+      outputController.loadDefaultSequence();
+      defaultPrinter->println("# Reset sequence to 'factory' default");
+    }
     void printChannelInfo() {
       outputController.printChannelInfo();
     }
@@ -564,6 +619,15 @@ const ArduForth::Word ArduForth::staticWords[] = {
     },
     text: "set-sequence-length",
     help: "( channelId length -- ) set length of channel's sequence, in steps"
+  },
+  {
+    isCompileTime: false,
+    isNative: true,
+    implementation: {
+      nativeFunction: &ArduForth::loadDefaultSequence
+    },
+    text: "default>sequence",
+    help: "( -- ) reset to default sequence"
   },
   {
     isCompileTime: false,
