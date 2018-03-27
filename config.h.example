@@ -1,6 +1,15 @@
+// Try sending "help" to this port.
+// Set to 0 to disable acting on Forth UDP packets.
 #define FORTH_UDP_PORT 7007
+
 // It won't break anything to make presence broadcast port
 // the same as FORTH_UDP_PORT, since it's all comments.
 // It just means that nodes will be processing more packets that they don't care about.
+// Set to 0 to not broadcast.
 #define PRESENCE_BROADCAST_PORT 7008
+
+// A list of {SSID, PASSWORD} of any networks that we should attempt to connect to.
+// The first successful connection wins, and last connection is stored in EEPROM
+// and automatically connected-to by the WiFi library,
+// even if it's not in this list.
 #define WIFI_NETWORKS {{"SomeNetwork","SomeNetworkPassword"}}

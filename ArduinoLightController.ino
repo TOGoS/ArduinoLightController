@@ -299,7 +299,7 @@ void broadcastPresence() {
 }
 
 void maybeBroadcastPresence() {
-  if( WiFi.status() == WL_CONNECTED && tickStartTime - lastBroadcastTime > 10000 ) {
+  if( WiFi.status() == WL_CONNECTED && tickStartTime - lastBroadcastTime > 10000 && PRESENCE_BROADCAST_PORT != 0 ) {
     broadcastPresence();
   }
 }
@@ -717,7 +717,8 @@ void setup() {
   outputController.begin();
   outputController.printChannelInfo();
   Serial.println("# Type 'help' for a command list.");
-  udp.begin(FORTH_UDP_PORT);
+  if( FORTH_UDP_PORT )
+    udp.begin(FORTH_UDP_PORT);
 }
 
 void loop() {
@@ -732,7 +733,7 @@ void loop() {
   }
   
   unsigned int packetSize;
-  if( (packetSize = udp.parsePacket()) ) {
+  if( FORTH_UDP_PORT && (packetSize = udp.parsePacket()) ) {
     Serial.print("# Received ");
     Serial.print(packetSize);
     //Serial.print("-byte UDP packet on port ");
