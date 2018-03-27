@@ -286,12 +286,16 @@ void broadcastPresence() {
   bufferPrinter.print(ALC_NAME);
   bufferPrinter.print(" v");
   bufferPrinter.println(ALC_VERSION);
-  bufferPrinter.print("# Listening for forth commands on port ");
-  bufferPrinter.println(PRESENCE_BROADCAST_PORT);
+  if( FORTH_UDP_PORT ) {
+    bufferPrinter.print("# Listening for forth commands on ");
+    bufferPrinter.print(WiFi.localIP());
+    bufferPrinter.print(":");
+    bufferPrinter.println(FORTH_UDP_PORT);
+  }
   //Serial.print("# Broadcasting presense packet to ");
   //Serial.print(broadcastIp);
   //Serial.print(":");
-  //Serial.println(FORTH_UDP_PORT);
+  //Serial.println(PRESENCE_BROADCAST_PORT);
   udp.beginPacketMulticast(broadcastIp, PRESENCE_BROADCAST_PORT, WiFi.localIP());
   udp.write(bufferPrinter.getBuffer(), bufferPrinter.size());
   udp.endPacket();
@@ -299,7 +303,7 @@ void broadcastPresence() {
 }
 
 void maybeBroadcastPresence() {
-  if( WiFi.status() == WL_CONNECTED && tickStartTime - lastBroadcastTime > 10000 && PRESENCE_BROADCAST_PORT != 0 ) {
+  if( WiFi.status() == WL_CONNECTED && tickStartTime - lastBroadcastTime > 10000 && PRESENCE_BROADCAST_PORT ) {
     broadcastPresence();
   }
 }
