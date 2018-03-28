@@ -16,7 +16,9 @@ and the same protocol is used over serial and UDP.
 Can be configured to connect to any of a set of WiFi networks
 listed in ```config.h```.
 
-If ```PRESENCE_BROADCAST_PORT``` is not zero (it defaults to 7008).
+If ```PRESENCE_BROADCAST_PORT``` is not zero (it defaults to 7008)
+then the node will announce itself by broadcasting an all-comments
+UDP packet on that port every 10 seconds.
 
 ## Compiling
 
