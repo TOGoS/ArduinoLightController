@@ -458,8 +458,8 @@ class ArduForth {
       outputController.setBpm( beats );
     }
     void setBeatDivision() {
-      uint8_t notesPerBeat = (uint8_t)pop();
       OutputController::ChannelID channelId = (OutputController::ChannelID)pop();
+      uint8_t notesPerBeat = (uint8_t)pop();
       outputController.setBeatDivision( channelId, notesPerBeat );
     }
     void downbeat() {
@@ -661,7 +661,7 @@ const ArduForth::Word ArduForth::staticWords[] = {
       nativeFunction: &ArduForth::setBeatDivision
     },
     text: "set-beat-division",
-    help: "( stepsPerBeat -- )"
+    help: "( channelId stepsPerBeat -- ) set steps per beat for the given channel"
   },
   {
     isCompileTime: false,
