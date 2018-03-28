@@ -522,8 +522,15 @@ class ArduForth {
       printStack();
     }
     
+    bool readingLineComment = false;
     void handleChar( char c ) {
       // TODO: Handle double-quoted strings
+      if( readingLineComment ) {
+        if( c == '\n' ) {
+          readingLineComment = false;
+        }
+        return;
+      }
       switch( c ) {
         case '\n':
           flushToken();
@@ -532,6 +539,11 @@ class ArduForth {
         case ' ': case '\t': case '\r':
           flushToken();
           break;
+        case '#':
+          if( tokenBufferLength == 0 ) {
+            readingLineComment = true;
+            return;
+          }
         default:
           tokenBuffer[tokenBufferLength++] = c;
       }
