@@ -2,6 +2,7 @@
   - beat
   - reset to defaults (long hold)
     - flash lights during long hold to indicate what's going to be done
+  - cycle between different defaults
 - Save sequences to EEPROM or whatever
 - Add per-channel control mode:
   - sequenced
